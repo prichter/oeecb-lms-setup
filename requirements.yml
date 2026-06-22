@@ -1,0 +1,7 @@
+# requirements.yml
+# Run by doing
+# ansible-galaxy collection install -r requirements.yml 
+# This runs on the local (WSL) machine before setup
+collections:
+  - name: community.docker
+  - name: community.general  # useful to have anyway

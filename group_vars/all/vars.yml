@@ -1,0 +1,33 @@
+# group_vars/all/vars.yml
+moodle_admin_user: "{{ vault_moodle_admin_user }}"
+moodle_admin_password: "{{ vault_moodle_admin_password }}"
+moodle_db_password: "{{ vault_moodle_db_password }}"
+
+odoo_admin_password: "{{ vault_odoo_admin_password }}"
+odoo_db_password: "{{ vault_odoo_db_password }}"
+
+n8n_encryption_key: "{{ vault_n8n_encryption_key }}"
+
+ldap_host: "{{ vault_ldap_host }}"
+ldap_bind_dn: "{{ vault_ldap_bind_dn }}"
+ldap_bind_password: "{{ vault_ldap_bind_password }}"
+ldap_search_base: "{{ vault_ldap_search_base }}"
+
+postgres_password: "{{ vault_postgres_postgres_password }}"
+
+ansible_password: "{{ vault_ansible_password }}"
+
+traefik_hostname: obhowk-251-traefik
+traefik_dashboard_users: "{{ vault_traefik_dashboard_users }}"
+
+moodle_hostname: obhowk-251-lms
+odoo_hostname: obhowk-251-odoo
+n8n_hostname: obhowk-251-n8n
+
+# Moodle Database Config
+moodle_db_user: obrien
+moodle_db_name: obrien
+
+# Moodle Site Configuration
+moodle_site_name: "O'Brien Ballarat LMS"
+moodle_site_shortname: "LMS"

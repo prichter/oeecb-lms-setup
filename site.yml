@@ -1,0 +1,5 @@
+---
+- name: Configure Docker host
+  hosts: all
+  roles:
+    - common

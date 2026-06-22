@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: odoo_db
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=odoo
+      - POSTGRES_PASSWORD=odoo_secret_password # Change this to a secure password or Ansible variable
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - ADMIN_PASSWD=odoo_secret_password
+    volumes:
+      - /opt/odoo/data/db:/var/lib/postgresql/data
+    networks:
+      - odoo_net
+    restart: always
+
+  odoo:
+    image: odoo:17.0 # Adjust version if you specifically want 16.0 or 15.0
+    # below was odoo_app
+    container_name: odoo
+    depends_on:
+      - db
+    ports:
+      - "8069"
+    environment:
+      - HOST=db
+      - USER=odoo
+      - PASSWORD=odoo_secret_password # Must match PostgreSQL password above
+    command: odoo --proxy-mode
+    volumes:
+      - /opt/odoo/data/odoo:/var/lib/odoo
+      - /opt/odoo/data/addons:/mnt/extra-addons
+    networks:
+      - odoo_net
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.odoo.rule=Host(`{{ odoo_hostname }}`)"
+      - "traefik.http.routers.odoo.entrypoints=websecure"
+      - "traefik.http.routers.odoo.tls=true"
+      
+      # --- TELL TRAEFIK ODOO'S INTERNAL PORT ---
+      - "traefik.http.services.odoo.loadbalancer.server.port=8069"
+
+      # --- ODOO PROXY HEADERS MIDDLEWARE ---
+      # Odoo, like Moodle, needs to know it's behind an HTTPS proxy 
+      # so it doesn't break session cookies or redirect loops.
+      - "traefik.http.routers.odoo.middlewares=odoo-headers"
+      - "traefik.http.middlewares.odoo-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+    # 20260622 Was 'always'
+    restart: unless-stopped
+
+networks:
+  odoo_net:
+    driver: bridge
+  proxy:
+    external: true

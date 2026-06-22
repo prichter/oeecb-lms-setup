@@ -1,0 +1,218 @@
+---
+- name: Set timezone
+  community.general.timezone:
+    name: Australia/Melbourne
+  tags: always
+
+- name: Force a rough clock sync via web headers (Bypasses APT)
+  ansible.builtin.shell: |
+    # Fetch the current time from a secure web header and force set the system clock
+    CURRENT_TIME=$(curl -sI https://www.google.com | grep -i '^date:' | sed 's/^[Dd]ate: //g' | tr -d '\r')
+    if [ ! -z "$CURRENT_TIME" ]; then
+      date -s "$CURRENT_TIME"
+    fi
+  failed_when: false # Don't crash if curl fails, let the next steps try
+  tags: always
+
+- name: Enable systemd-timesyncd as a fallback
+  ansible.builtin.command: timedatectl set-ntp true
+  tags: always
+
+- name: Clean up corrupted apt cache files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/cache/apt/pkgcache.bin
+    - /var/cache/apt/srcpkgcache.bin
+  tags: always
+
+- name: Force a clean apt cache rebuild
+  ansible.builtin.command: apt-get clean
+  tags: always
+
+- name: Ensure chrony is installed
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+    update_cache: true
+  tags: always
+
+- name: Stop chrony service to allow manual step
+  ansible.builtin.systemd:
+    name: chrony
+    state: stopped
+  tags: always
+
+- name: Force immediate clock sync against public NTP
+  ansible.builtin.command: chronyd -q 'pool au.pool.ntp.org iburst'
+  register: ntp_sync
+  changed_when: ntp_sync.rc == 0
+  tags: always
+
+- name: Ensure chrony is started and enabled
+  ansible.builtin.systemd:
+    name: chrony
+    state: started
+    enabled: true
+  tags: always
+
+- name: Install prerequisites
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+  tags: always
+
+- name: Add Docker GPG key
+  shell: |
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      -o /etc/apt/keyrings/docker.asc
+  tags: always
+
+- name: Add Docker repo
+  shell: |
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] \
+    https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+    > /etc/apt/sources.list.d/docker.list
+  tags: always
+
+- name: Install Docker
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+  tags: always
+
+- name: Create app directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/traefik/data
+    - /opt/moodle/data
+    - /opt/moodle/data/moodle
+    - /opt/moodle/data/moodledata
+    - /opt/moodle/data/db
+    - /opt/odoo/data
+    - /opt/odoo/data/odoo
+    - /opt/odoo/data/addons
+    - /opt/odoo/data/db
+    - /opt/n8n/data
+    - /opt/n8n/data/data
+  tags: always
+
+- name: Add user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+
+
+- name: Create proxy Docker network
+  community.docker.docker_network:
+    name: proxy
+    state: present
+  tags: always
+
+- name: Copy Traefik compose files
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: traefik/docker-compose.yml.j2, dest: /opt/traefik/docker-compose.yml }
+    - { src: traefik/traefik.yml.j2, dest: /opt/traefik/traefik.yml }
+  tags: traefik
+
+- name: Copy Moodle compose files
+  template:
+    src: moodle/docker-compose.yml.j2
+    dest: /opt/moodle/docker-compose.yml
+    mode: '0644'
+  tags: moodle
+
+- name: Copy Odoo compose files
+  template:
+    src: odoo/docker-compose.yml.j2
+    dest: /opt/odoo/docker-compose.yml
+    mode: '0644'
+  tags: odoo
+
+- name: Copy n8n compose files
+  template:
+    src: n8n/docker-compose.yml.j2
+    dest: /opt/n8n/docker-compose.yml
+    mode: '0644'
+  tags: n8n
+
+- name: Bring up Traefik
+  community.docker.docker_compose_v2:
+    project_src: /opt/traefik
+    state: present
+  tags: traefik
+
+- name: Ensure Moodle deployment directory exists
+  ansible.builtin.file:
+    path: /opt/moodle
+    state: directory
+    mode: '0755'
+  tags: moodle
+
+- name: Deploy Moodle Stack via Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/moodle
+    state: present
+  tags: moodle
+
+- name: Ensure Odoo data directory has correct permissions
+  ansible.builtin.shell: |
+    sudo chown -R 101:101 /opt/odoo/data
+    sudo chmod -R 755 /opt/odoo/data
+  become: no # Uses your proven passwordless sudo shell execution
+  tags: odoo
+
+- name: Clone OCA Quality Module (Raw Sudo Shell)
+  ansible.builtin.shell: |
+    sudo git clone --depth 1 -b 17.0 https://github.com/OCA/quality.git /opt/odoo/data/addons/quality
+  args:
+    creates: /opt/odoo/data/addons/quality/.git
+  become: no # <--- Crucial: Disables Ansible's internal TTY-forcing escalation wrapper
+  tags: odoo
+
+- name: Ensure Odoo data directory has correct permissions
+  ansible.builtin.shell: |
+    sudo chown -R 101:101 /opt/odoo
+    sudo chmod -R 755 /opt/odoo
+  become: no # Uses your proven passwordless sudo shell execution
+  tags: odoo
+
+- name: Set db permissions
+  ansible.builtin.shell: |
+    sudo chown -R 999:999 /opt/odoo/data/db
+    sudo chmod -R 755 /opt/odoo/data/db
+  become: no # Uses your proven passwordless sudo shell execution
+  tags: odoo
+
+- name: Bring up Odoo (Raw Sudo Shell)
+  ansible.builtin.shell: |
+    sudo docker compose up -d
+  args:
+    chdir: /opt/odoo
+  become: no # <--- Crucial: Bypasses the Ansible Python TTY wrapper
+  tags: odoo
+
+- name: Bring up n8n
+  community.docker.docker_compose_v2:
+    project_src: /opt/n8n
+    state: present
+  tags: n8n
