@@ -1,73 +1,67 @@
+version: '3.8'
+
 services:
   moodle-db:
     image: postgres:16-alpine
     container_name: moodle-db
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=moodle
-      - POSTGRES_PASSWORD={{ vault_moodle_db_password }}
-      - POSTGRES_DB=moodle
+      POSTGRES_DB: {{ vault_moodle_db_name }}
+      POSTGRES_USER: {{ vault_moodle_db_user }}
+      POSTGRES_PASSWORD: {{ vault_moodle_db_password }}
     volumes:
       - moodle_data_db:/var/lib/postgresql/data
     networks:
-      - proxy
+      - moodle_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U moodle -d moodle"]
+      test: ["CMD-SHELL", "pg_isready -U {{ vault_moodle_db_user }} -d {{ vault_moodle_db_name }}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   moodle:
-    image: ellakcy/moodle:postgresql_apache_latest
+    image: erseco/alpine-moodle
     container_name: moodle
     restart: unless-stopped
     depends_on:
       moodle-db:
         condition: service_healthy
     environment:
-      # --- FIX FOR THE APACHE WARNING ---
-      - APACHE_SERVER_NAME={{ moodle_hostname }}
-
-      # Database connection
-      - MOODLE_DB_TYPE=pgsql
-      - MOODLE_DB_HOST=moodle-db
-      - MOODLE_DB_PORT=5432
-      - MOODLE_DB_USER=moodle
-      - MOODLE_DB_PASSWORD={{ vault_moodle_db_password }}
-      - MOODLE_DB_NAME=moodle
-      
-      # --- THE GREEK IMAGE TRICK ---
-      # We give the internal installer the http:// it craves so it doesn't crash
-      - MOODLE_URL=http://{{ moodle_hostname }}
-
-      # Admin Account Provisioning
-      - MOODLE_ADMIN="{{ vault_moodle_admin_user }}"
-      - MOODLE_PASSWORD="{{ vault_moodle_admin_password }}"
+      SITE_URL: https://{{ moodle_hostname }}
+      REVERSEPROXY: "true"
+      SSLPROXY: "true"
+      DB_TYPE: pgsql
+      DB_HOST: moodle-db
+      DB_PORT: 5432
+      DB_NAME: {{ vault_moodle_db_name }}
+      DB_USER: {{ vault_moodle_db_user }}
+      DB_PASS: {{ vault_moodle_db_password }}
+      MOODLE_SITENAME: {{ moodle_sitename }}
+      MOODLE_USERNAME: {{ vault_moodle_admin_user }}
+      MOODLE_PASSWORD: {{ vault_moodle_admin_password }}
+      MOODLE_EMAIL: {{ vault_moodle_admin_email }}
     volumes:
-      - moodle_data_apps:/var/www/html
       - moodle_data_moodledata:/var/www/moodledata
+      - moodle_data_html:/var/www/html
     networks:
+      - moodle_net
       - proxy
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.moodle.rule=Host(`{{ moodle_hostname }}`)"
       - "traefik.http.routers.moodle.entrypoints=websecure"
       - "traefik.http.routers.moodle.tls=true"
-      - "traefik.http.services.moodle.loadbalancer.server.port=80"
-      
-      # --- FORCE TRAEFIK TO UPGRADE THE HEADER ---
-      # This tells Traefik to pass custom SSL headers so Moodle knows it's actually secure
+      - "traefik.http.services.moodle.loadbalancer.server.port=8080"
       - "traefik.http.routers.moodle.middlewares=moodle-headers"
       - "traefik.http.middlewares.moodle-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
 
 volumes:
   moodle_data_db:
-    driver: local
-  moodle_data_apps:
-    driver: local
   moodle_data_moodledata:
-    driver: local
+  moodle_data_html:
 
 networks:
+  moodle_net:
+    driver: bridge
   proxy:
     external: true

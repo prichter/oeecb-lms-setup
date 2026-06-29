@@ -4,9 +4,10 @@ all:
       ansible_host: 192.168.138.168      # your VM IP
       ansible_user: obrien
       ansible_become: true
-      andible_become_method: sudo
+      ansible_become_method: sudo
   vars:
     traefik_hostname: obhosv-traefik
     moodle_hostname: obhosv-lms
     odoo_hostname: obhosv-odoo
-    n8n_hostname: obhosv-n8n    
+    n8n_hostname: obhosv-n8n
+    moodle_sitename: OBrienElectrical

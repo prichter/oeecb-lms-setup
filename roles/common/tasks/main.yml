@@ -174,6 +174,12 @@
     state: present
   tags: moodle
 
+- name: Ensure unzip is installed
+  apt:
+    name: unzip
+    state: present
+  tags: odoo
+
 - name: Ensure Odoo data directory has correct permissions
   ansible.builtin.shell: |
     sudo chown -R 101:101 /opt/odoo/data
@@ -181,12 +187,17 @@
   become: no # Uses your proven passwordless sudo shell execution
   tags: odoo
 
-- name: Clone OCA Quality Module (Raw Sudo Shell)
+- name: Install OCA quality_control_oca module from OCA/manufacture
   ansible.builtin.shell: |
-    sudo git clone --depth 1 -b 17.0 https://github.com/OCA/quality.git /opt/odoo/data/addons/quality
+    sudo rm -rf /opt/odoo/data/addons/quality
+    sudo rm -rf /opt/odoo/data/addons/quality_control_oca
+    wget -q https://github.com/OCA/manufacture/archive/refs/heads/17.0.zip -O /tmp/manufacture.zip
+    unzip -q /tmp/manufacture.zip "manufacture-17.0/quality_control_oca/*" -d /tmp/manufacture-extract
+    sudo mv /tmp/manufacture-extract/manufacture-17.0/quality_control_oca /opt/odoo/data/addons/
+    rm -rf /tmp/manufacture.zip /tmp/manufacture-extract
   args:
-    creates: /opt/odoo/data/addons/quality/.git
-  become: no # <--- Crucial: Disables Ansible's internal TTY-forcing escalation wrapper
+    creates: /opt/odoo/data/addons/quality_control_oca/__manifest__.py
+  become: no
   tags: odoo
 
 - name: Ensure Odoo data directory has correct permissions
@@ -211,8 +222,18 @@
   become: no # <--- Crucial: Bypasses the Ansible Python TTY wrapper
   tags: odoo
 
+- name: Set n8n permissions
+  ansible.builtin.shell: |
+    sudo chown -R 1000:1000 /opt/n8n/data
+    sudo chmod -R 755 /opt/n8n/data
+  become: no # Uses your proven passwordless sudo shell execution
+  tags: odoo
+
 - name: Bring up n8n
-  community.docker.docker_compose_v2:
-    project_src: /opt/n8n
-    state: present
+  ansible.builtin.shell: |
+    sudo docker compose up -d
+  args:
+    chdir: /opt/n8n
+  become: false
+  become_user: "{{ ansible_user }}"
   tags: n8n
