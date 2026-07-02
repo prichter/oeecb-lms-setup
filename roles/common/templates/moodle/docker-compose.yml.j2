@@ -28,7 +28,7 @@ services:
         condition: service_healthy
     environment:
       SITE_URL: https://{{ moodle_hostname }}
-      REVERSEPROXY: "true"
+      REVERSEPROXY: "false"
       SSLPROXY: "true"
       DB_TYPE: pgsql
       DB_HOST: moodle-db
