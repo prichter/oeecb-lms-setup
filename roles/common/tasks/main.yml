@@ -93,24 +93,27 @@
     update_cache: true
   tags: always
 
-- name: Check whether {{ docker_data_root }} is a mounted filesystem
-  ansible.builtin.command: mountpoint -q "{{ docker_data_root }}"
-  register: docker_data_root_mount
+- name: Check whether required data mounts are present
+  ansible.builtin.command: mountpoint -q "{{ item }}"
+  register: required_mounts
   changed_when: false
   failed_when: false
+  loop:
+    - "{{ docker_data_root }}"
+    - "{{ docker_system_root }}"
   tags: always
 
-- name: Abort if the data drive is not mounted at {{ docker_data_root }}
+- name: Abort if any required mount is missing
   ansible.builtin.fail:
     msg: >-
-      {{ docker_data_root }} is not currently a mount point. Refusing to
-      continue, because container data would silently be written to the
-      OS disk instead of the data drive (/dev/sdb1). Mount the data drive
-      at {{ docker_data_root }} first, then re-run this playbook.
-  when: docker_data_root_mount.rc != 0
+      {{ item.item }} is not currently a mount point. Refusing to continue,
+      because data would silently be written to the OS disk instead of the
+      data drive (/dev/sdb1). Mount it first, then re-run this playbook.
+  when: item.rc != 0
+  loop: "{{ required_mounts.results }}"
   tags: always
 
-- name: Create app config directories (reproducible, live on OS disk)
+- name: Create app config directories (reproducible, live on {{ docker_system_root }}k)
   file:
     path: "{{ item }}"
     state: directory
@@ -157,40 +160,40 @@
     dest: "{{ item.dest }}"
     mode: '0644'
   loop:
-    - { src: traefik/docker-compose.yml.j2, dest: /opt/traefik/docker-compose.yml }
-    - { src: traefik/traefik.yml.j2, dest: /opt/traefik/traefik.yml }
+    - { src: traefik/docker-compose.yml.j2, dest: "{{ docker_system_root }}/traefik/docker-compose.yml" }
+    - { src: traefik/traefik.yml.j2, dest: "{{ docker_system_root }}/traefik/traefik.yml" }
   tags: traefik
 
 - name: Copy Moodle compose files
   template:
     src: moodle/docker-compose.yml.j2
-    dest: /opt/moodle/docker-compose.yml
+    dest: "{{ docker_system_root }}/moodle/docker-compose.yml"
     mode: '0644'
   tags: moodle
 
 - name: Copy Odoo compose files
   template:
     src: odoo/docker-compose.yml.j2
-    dest: /opt/odoo/docker-compose.yml
+    dest: "{{ docker_system_root }}/odoo/docker-compose.yml"
     mode: '0644'
   tags: odoo
 
 - name: Copy n8n compose files
   template:
     src: n8n/docker-compose.yml.j2
-    dest: /opt/n8n/docker-compose.yml
+    dest: "{{ docker_system_root }}/n8n/docker-compose.yml"
     mode: '0644'
   tags: n8n
 
 - name: Bring up Traefik
   community.docker.docker_compose_v2:
-    project_src: /opt/traefik
+    project_src: "{{ docker_system_root }}/traefik"
     state: present
   tags: traefik
 
 - name: Ensure Moodle deployment directory exists
   ansible.builtin.file:
-    path: /opt/moodle
+    path: "{{ docker_system_root }}/moodle"
     state: directory
     mode: '0755'
   tags: moodle
@@ -229,7 +232,7 @@
 
 - name: Deploy Moodle Stack via Docker Compose
   community.docker.docker_compose_v2:
-    project_src: /opt/moodle
+    project_src: "{{ docker_system_root }}/moodle"
     state: present
   tags: moodle
 
@@ -301,7 +304,7 @@
   ansible.builtin.shell: |
     sudo docker compose up -d
   args:
-    chdir: /opt/odoo
+    chdir: "{{ docker_system_root }}/odoo"
   become: no # <--- Crucial: Bypasses the Ansible Python TTY wrapper
   tags: odoo
 
@@ -316,7 +319,58 @@
   ansible.builtin.shell: |
     sudo docker compose up -d
   args:
-    chdir: /opt/n8n
+    chdir: "{{ docker_system_root }}/n8n"
   become: false
   become_user: "{{ ansible_user }}"
   tags: n8n
+
+- name: Get currently enabled authentication plugins
+  community.docker.docker_container_exec:
+    container: moodle
+    argv: [php, admin/cli/cfg.php, --name=auth, --no-eol]
+  register: moodle_auth_current
+  changed_when: false
+  tags: [moodle, moodle_ldap]
+
+- name: Enable the LDAP authentication plugin alongside existing methods
+  community.docker.docker_container_exec:
+    container: moodle
+    argv:
+      - php
+      - admin/cli/cfg.php
+      - --name=auth
+      - "--set={{ (moodle_auth_current.stdout.split(',') + ['ldap']) | unique | join(',') }}"
+  when: "'ldap' not in moodle_auth_current.stdout.split(',')"
+  tags: [moodle, moodle_ldap]
+
+- name: Configure LDAP / Active Directory connection settings
+  community.docker.docker_container_exec:
+    container: moodle
+    argv:
+      - php
+      - admin/cli/cfg.php
+      - --component=auth_ldap
+      - "--name={{ item.name }}"
+      - "--set={{ item.value }}"
+  loop:
+    - { name: host_url, value: "{{ vault_ldap_host }}" }
+    - { name: bind_dn,  value: "{{ vault_ldap_bind_dn }}" }
+    - { name: contexts, value: "{{ vault_ldap_search_base }}" }
+    - { name: user_type,      value: "ad" }
+    - { name: user_attribute, value: "sAMAccountName" }
+    - { name: search_sub,    value: "1" }
+  changed_when: true
+  tags: [moodle, moodle_ldap]
+
+- name: Configure LDAP bind password (separate task to keep it out of logs)
+  community.docker.docker_container_exec:
+    container: moodle
+    argv:
+      - php
+      - admin/cli/cfg.php
+      - --component=auth_ldap
+      - --name=bind_pw
+      - "--set={{ vault_ldap_bind_password }}"
+  no_log: true
+  changed_when: true
+  tags: [moodle, moodle_ldap]

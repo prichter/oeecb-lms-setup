@@ -10,7 +10,7 @@ services:
       - DOCKER_API_VERSION=1.54
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/traefik/traefik.yml:/traefik.yml:ro
+      - "{{ docker_system_root }}/traefik/traefik.yml:/traefik.yml:ro"
     networks:
       - proxy
     labels:
