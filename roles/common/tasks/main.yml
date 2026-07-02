@@ -92,23 +92,49 @@
     update_cache: true
   tags: always
 
-- name: Create app directories
+- name: Check whether {{ docker_data_root }} is a mounted filesystem
+  ansible.builtin.command: mountpoint -q "{{ docker_data_root }}"
+  register: docker_data_root_mount
+  changed_when: false
+  failed_when: false
+  tags: always
+
+- name: Abort if the data drive is not mounted at {{ docker_data_root }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ docker_data_root }} is not currently a mount point. Refusing to
+      continue, because container data would silently be written to the
+      OS disk instead of the data drive (/dev/sdb1). Mount the data drive
+      at {{ docker_data_root }} first, then re-run this playbook.
+  when: docker_data_root_mount.rc != 0
+  tags: always
+
+- name: Create app config directories (reproducible, live on OS disk)
   file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
   loop:
-    - /opt/traefik/data
-    - /opt/moodle/data
-    - /opt/moodle/data/moodle
-    - /opt/moodle/data/moodledata
-    - /opt/moodle/data/db
-    - /opt/odoo/data
-    - /opt/odoo/data/odoo
-    - /opt/odoo/data/addons
-    - /opt/odoo/data/db
-    - /opt/n8n/data
-    - /opt/n8n/data/data
+    - /opt/traefik
+    - /opt/moodle
+    - /opt/odoo
+    - /opt/n8n
+  tags: always
+
+- name: Create app data directories (persistent state, live on {{ docker_data_root }})
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ docker_data_root }}/traefik/data"
+    - "{{ docker_data_root }}/moodle/db"
+    - "{{ docker_data_root }}/moodle/moodledata"
+    - "{{ docker_data_root }}/moodle/html"
+    - "{{ docker_data_root }}/odoo/db"
+    - "{{ docker_data_root }}/odoo/odoo"
+    - "{{ docker_data_root }}/odoo/addons"
+    - "{{ docker_data_root }}/n8n/data"
   tags: always
 
 - name: Add user to docker group
@@ -174,6 +200,37 @@
     state: present
   tags: moodle
 
+# H5P core content (mod_h5pactivity) ships in Moodle itself since 3.9 and
+# should already be available in "Add an activity" with no extra work.
+# Only run this (ansible-playbook site.yml --tags h5p) if you specifically
+# want the older community mod_hvp plugin instead — e.g. for h5p.org Hub
+# browsing or resumable content state. Moodle's own docs recommend NOT
+# running both side by side. The 'never' tag means these are skipped on
+# normal runs and only execute when h5p is explicitly requested.
+- name: Check if H5P (mod_hvp) plugin is already installed
+  ansible.builtin.stat:
+    path: "{{ docker_data_root }}/moodle/html/mod/hvp/version.php"
+  register: h5p_plugin_installed
+  tags: [h5p, never]
+
+- name: Install H5P (mod_hvp) plugin via Moosh
+  community.docker.docker_container_exec:
+    container: moodle
+    command: moosh plugin-install mod_hvp
+  register: h5p_install
+  failed_when: false
+  when: not h5p_plugin_installed.stat.exists
+  tags: [h5p, never]
+
+- name: Retry H5P plugin install (known Moosh first-run issue, see erseco/alpine-moodle docs)
+  community.docker.docker_container_exec:
+    container: moodle
+    command: moosh plugin-install --delete mod_hvp
+  when:
+    - not h5p_plugin_installed.stat.exists
+    - h5p_install.rc != 0
+  tags: [h5p, never]
+
 - name: Ensure unzip is installed
   apt:
     name: unzip
@@ -182,35 +239,28 @@
 
 - name: Ensure Odoo data directory has correct permissions
   ansible.builtin.shell: |
-    sudo chown -R 101:101 /opt/odoo/data
-    sudo chmod -R 755 /opt/odoo/data
+    sudo chown -R 101:101 {{ docker_data_root }}/odoo
+    sudo chmod -R 755 {{ docker_data_root }}/odoo
   become: no # Uses your proven passwordless sudo shell execution
   tags: odoo
 
 - name: Install OCA quality_control_oca module from OCA/manufacture
   ansible.builtin.shell: |
-    sudo rm -rf /opt/odoo/data/addons/quality
-    sudo rm -rf /opt/odoo/data/addons/quality_control_oca
+    sudo rm -rf {{ docker_data_root }}/odoo/addons/quality
+    sudo rm -rf {{ docker_data_root }}/odoo/addons/quality_control_oca
     wget -q https://github.com/OCA/manufacture/archive/refs/heads/17.0.zip -O /tmp/manufacture.zip
     unzip -q /tmp/manufacture.zip "manufacture-17.0/quality_control_oca/*" -d /tmp/manufacture-extract
-    sudo mv /tmp/manufacture-extract/manufacture-17.0/quality_control_oca /opt/odoo/data/addons/
+    sudo mv /tmp/manufacture-extract/manufacture-17.0/quality_control_oca {{ docker_data_root }}/odoo/addons/
     rm -rf /tmp/manufacture.zip /tmp/manufacture-extract
   args:
-    creates: /opt/odoo/data/addons/quality_control_oca/__manifest__.py
+    creates: "{{ docker_data_root }}/odoo/addons/quality_control_oca/__manifest__.py"
   become: no
-  tags: odoo
-
-- name: Ensure Odoo data directory has correct permissions
-  ansible.builtin.shell: |
-    sudo chown -R 101:101 /opt/odoo
-    sudo chmod -R 755 /opt/odoo
-  become: no # Uses your proven passwordless sudo shell execution
   tags: odoo
 
 - name: Set db permissions
   ansible.builtin.shell: |
-    sudo chown -R 999:999 /opt/odoo/data/db
-    sudo chmod -R 755 /opt/odoo/data/db
+    sudo chown -R 999:999 {{ docker_data_root }}/odoo/db
+    sudo chmod -R 755 {{ docker_data_root }}/odoo/db
   become: no # Uses your proven passwordless sudo shell execution
   tags: odoo
 
@@ -224,10 +274,10 @@
 
 - name: Set n8n permissions
   ansible.builtin.shell: |
-    sudo chown -R 1000:1000 /opt/n8n/data
-    sudo chmod -R 755 /opt/n8n/data
+    sudo chown -R 1000:1000 {{ docker_data_root }}/n8n/data
+    sudo chmod -R 755 {{ docker_data_root }}/n8n/data
   become: no # Uses your proven passwordless sudo shell execution
-  tags: odoo
+  tags: n8n
 
 - name: Bring up n8n
   ansible.builtin.shell: |

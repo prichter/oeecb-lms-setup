@@ -1,4 +1,11 @@
 # group_vars/all/vars.yml
+
+# Single source of truth for where persistent container data lives.
+# This is the drive your admin mounts at /mnt/docker (/dev/sdb1) —
+# everything under here is what gets backed up, and restoring it to
+# a fresh host + `docker compose up` should fully reconstitute state.
+docker_data_root: /mnt/docker
+
 moodle_admin_user: "{{ vault_moodle_admin_user }}"
 moodle_admin_password: "{{ vault_moodle_admin_password }}"
 moodle_db_password: "{{ vault_moodle_db_password }}"
@@ -28,6 +35,6 @@ n8n_hostname: obhowk-251-n8n
 moodle_db_user: obrien
 moodle_db_name: obrien
 
-# Moodle Site Configuration
-moodle_site_name: "O'Brien Ballarat LMS"
-moodle_site_shortname: "LMS"
+# Note: the Moodle site name (moodle_sitename) is set per-deployment
+# in inventory.yml alongside traefik_hostname/moodle_hostname/etc,
+# not here.

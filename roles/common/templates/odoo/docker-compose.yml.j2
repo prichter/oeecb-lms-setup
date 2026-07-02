@@ -7,11 +7,11 @@ services:
     environment:
       - POSTGRES_DB=postgres
       - POSTGRES_USER=odoo
-      - POSTGRES_PASSWORD=odoo_secret_password # Change this to a secure password or Ansible variable
+      - POSTGRES_PASSWORD={{ vault_odoo_db_password }}
       - PGDATA=/var/lib/postgresql/data/pgdata
-      - ADMIN_PASSWD=odoo_secret_password
+      - ADMIN_PASSWD={{ vault_odoo_admin_password }}
     volumes:
-      - /opt/odoo/data/db:/var/lib/postgresql/data
+      - {{ docker_data_root }}/odoo/db:/var/lib/postgresql/data
     networks:
       - odoo_net
     restart: always
@@ -27,11 +27,11 @@ services:
     environment:
       - HOST=db
       - USER=odoo
-      - PASSWORD=odoo_secret_password # Must match PostgreSQL password above
+      - PASSWORD={{ vault_odoo_db_password }} # Must match PostgreSQL password above
     command: odoo --proxy-mode
     volumes:
-      - /opt/odoo/data/odoo:/var/lib/odoo
-      - /opt/odoo/data/addons:/mnt/extra-addons
+      - {{ docker_data_root }}/odoo/odoo:/var/lib/odoo
+      - {{ docker_data_root }}/odoo/addons:/mnt/extra-addons
     networks:
       - odoo_net
       - proxy

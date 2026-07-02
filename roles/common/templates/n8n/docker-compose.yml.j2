@@ -14,7 +14,7 @@ services:
       - TZ=Australia/Melbourne
       - N8N_TRUST_PROXY=true
     volumes:
-      - /opt/n8n/data:/home/node/.n8n
+      - {{ docker_data_root }}/n8n/data:/home/node/.n8n
     networks:
       - proxy
     labels:

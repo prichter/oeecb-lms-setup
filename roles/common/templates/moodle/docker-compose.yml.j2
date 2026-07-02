@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: {{ vault_moodle_db_user }}
       POSTGRES_PASSWORD: {{ vault_moodle_db_password }}
     volumes:
-      - moodle_data_db:/var/lib/postgresql/data
+      - {{ docker_data_root }}/moodle/db:/var/lib/postgresql/data
     networks:
       - moodle_net
     healthcheck:
@@ -41,8 +41,8 @@ services:
       MOODLE_PASSWORD: {{ vault_moodle_admin_password }}
       MOODLE_EMAIL: {{ vault_moodle_admin_email }}
     volumes:
-      - moodle_data_moodledata:/var/www/moodledata
-      - moodle_data_html:/var/www/html
+      - {{ docker_data_root }}/moodle/moodledata:/var/www/moodledata
+      - {{ docker_data_root }}/moodle/html:/var/www/html
     networks:
       - moodle_net
       - proxy
@@ -54,11 +54,6 @@ services:
       - "traefik.http.services.moodle.loadbalancer.server.port=8080"
       - "traefik.http.routers.moodle.middlewares=moodle-headers"
       - "traefik.http.middlewares.moodle-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
-
-volumes:
-  moodle_data_db:
-  moodle_data_moodledata:
-  moodle_data_html:
 
 networks:
   moodle_net:
