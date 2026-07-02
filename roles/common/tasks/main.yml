@@ -63,6 +63,7 @@
       - ca-certificates
       - curl
       - gnupg
+      - net-tools
     state: present
     update_cache: true
   tags: always
@@ -115,10 +116,10 @@
     state: directory
     mode: '0755'
   loop:
-    - /opt/traefik
-    - /opt/moodle
-    - /opt/odoo
-    - /opt/n8n
+    - "{{ docker_system_root }}/traefik"
+    - "{{ docker_system_root }}/moodle"
+    - "{{ docker_system_root }}/odoo"
+    - "{{ docker_system_root }}/n8n"
   tags: always
 
 - name: Create app data directories (persistent state, live on {{ docker_data_root }})

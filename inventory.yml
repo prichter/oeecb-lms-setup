@@ -6,8 +6,21 @@ all:
       ansible_become: true
       ansible_become_method: sudo
   vars:
-    traefik_hostname: obhosv-traefik
-    moodle_hostname: obhosv-lms
-    odoo_hostname: obhosv-odoo
-    n8n_hostname: obhosv-n8n
+    # Per-environment hostnames — this is the ONLY place these should be
+    # set (they used to also be defined in group_vars/all/vars.yml with
+    # different values, which silently won because of Ansible's variable
+    # precedence rules; that duplicate has been removed).
+    #
+    # These currently match the live dev box's own hostname (OBHOWK-251)
+    # and what's already registered in Traefik. When you set this up on
+    # the prod server, copy this whole inventory.yml to something like
+    # inventory-prod.yml, point ansible_host at the prod box, and change
+    # these four values to the real DNS-resolvable names your resolver
+    # will answer for (e.g. lms.yourdomain.com.au rather than a short
+    # internal name) — then run with `-i inventory-prod.yml` instead.
+    # site.yml and every role stay exactly the same either way.
+    traefik_hostname: obhowk-251-traefik
+    moodle_hostname: obhowk-251-lms
+    odoo_hostname: obhowk-251-odoo
+    n8n_hostname: obhowk-251-n8n
     moodle_sitename: OBrienElectrical

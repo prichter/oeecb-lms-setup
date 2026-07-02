@@ -4,7 +4,8 @@
 # This is the drive your admin mounts at /mnt/docker (/dev/sdb1) —
 # everything under here is what gets backed up, and restoring it to
 # a fresh host + `docker compose up` should fully reconstitute state.
-docker_data_root: /mnt/docker
+docker_data_root: /srv/docker
+docker_system_root: /mnt/docker
 
 moodle_admin_user: "{{ vault_moodle_admin_user }}"
 moodle_admin_password: "{{ vault_moodle_admin_password }}"
@@ -24,12 +25,11 @@ postgres_password: "{{ vault_postgres_postgres_password }}"
 
 ansible_password: "{{ vault_ansible_password }}"
 
-traefik_hostname: obhowk-251-traefik
 traefik_dashboard_users: "{{ vault_traefik_dashboard_users }}"
 
-moodle_hostname: obhowk-251-lms
-odoo_hostname: obhowk-251-odoo
-n8n_hostname: obhowk-251-n8n
+# Note: traefik_hostname / moodle_hostname / odoo_hostname / n8n_hostname
+# are per-environment values (this dev box vs the eventual prod server +
+# DNS), so they live solely in inventory.yml, not here.
 
 # Moodle Database Config
 moodle_db_user: obrien
