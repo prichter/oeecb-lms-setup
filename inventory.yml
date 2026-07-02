@@ -1,7 +1,7 @@
 all:
   hosts:
     docker-host:
-      ansible_host: 192.168.138.168      # your VM IP
+      ansible_host: 192.168.138.169      # your VM IP
       ansible_user: obrien
       ansible_become: true
       ansible_become_method: sudo

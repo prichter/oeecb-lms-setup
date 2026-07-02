@@ -1,0 +1,308 @@
+diff --git a/group_vars/all/vars.yml b/group_vars/all/vars.yml
+index f281385..6a07a62 100644
+--- a/group_vars/all/vars.yml
++++ b/group_vars/all/vars.yml
+@@ -1,4 +1,11 @@
+ # group_vars/all/vars.yml
++
++# Single source of truth for where persistent container data lives.
++# This is the drive your admin mounts at /mnt/docker (/dev/sdb1) —
++# everything under here is what gets backed up, and restoring it to
++# a fresh host + `docker compose up` should fully reconstitute state.
++docker_data_root: /mnt/docker
++
+ moodle_admin_user: "{{ vault_moodle_admin_user }}"
+ moodle_admin_password: "{{ vault_moodle_admin_password }}"
+ moodle_db_password: "{{ vault_moodle_db_password }}"
+@@ -28,6 +35,6 @@ n8n_hostname: obhowk-251-n8n
+ moodle_db_user: obrien
+ moodle_db_name: obrien
+ 
+-# Moodle Site Configuration
+-moodle_site_name: "O'Brien Ballarat LMS"
+-moodle_site_shortname: "LMS"
+\ No newline at end of file
++# Note: the Moodle site name (moodle_sitename) is set per-deployment
++# in inventory.yml alongside traefik_hostname/moodle_hostname/etc,
++# not here.
+\ No newline at end of file
+diff --git a/inventory.yml b/inventory.yml
+index 90040ff..950b3b3 100755
+--- a/inventory.yml
++++ b/inventory.yml
+@@ -1,7 +1,7 @@
+ all:
+   hosts:
+     docker-host:
+-      ansible_host: 192.168.138.168      # your VM IP
++      ansible_host: 192.168.138.169      # your VM IP
+       ansible_user: obrien
+       ansible_become: true
+       ansible_become_method: sudo
+diff --git a/roles/common/tasks/main.yml b/roles/common/tasks/main.yml
+index b314af8..66796f0 100755
+--- a/roles/common/tasks/main.yml
++++ b/roles/common/tasks/main.yml
+@@ -92,23 +92,49 @@
+     update_cache: true
+   tags: always
+ 
+-- name: Create app directories
++- name: Check whether {{ docker_data_root }} is a mounted filesystem
++  ansible.builtin.command: mountpoint -q "{{ docker_data_root }}"
++  register: docker_data_root_mount
++  changed_when: false
++  failed_when: false
++  tags: always
++
++- name: Abort if the data drive is not mounted at {{ docker_data_root }}
++  ansible.builtin.fail:
++    msg: >-
++      {{ docker_data_root }} is not currently a mount point. Refusing to
++      continue, because container data would silently be written to the
++      OS disk instead of the data drive (/dev/sdb1). Mount the data drive
++      at {{ docker_data_root }} first, then re-run this playbook.
++  when: docker_data_root_mount.rc != 0
++  tags: always
++
++- name: Create app config directories (reproducible, live on OS disk)
+   file:
+     path: "{{ item }}"
+     state: directory
+     mode: '0755'
+   loop:
+-    - /opt/traefik/data
+-    - /opt/moodle/data
+-    - /opt/moodle/data/moodle
+-    - /opt/moodle/data/moodledata
+-    - /opt/moodle/data/db
+-    - /opt/odoo/data
+-    - /opt/odoo/data/odoo
+-    - /opt/odoo/data/addons
+-    - /opt/odoo/data/db
+-    - /opt/n8n/data
+-    - /opt/n8n/data/data
++    - /opt/traefik
++    - /opt/moodle
++    - /opt/odoo
++    - /opt/n8n
++  tags: always
++
++- name: Create app data directories (persistent state, live on {{ docker_data_root }})
++  file:
++    path: "{{ item }}"
++    state: directory
++    mode: '0755'
++  loop:
++    - "{{ docker_data_root }}/traefik/data"
++    - "{{ docker_data_root }}/moodle/db"
++    - "{{ docker_data_root }}/moodle/moodledata"
++    - "{{ docker_data_root }}/moodle/html"
++    - "{{ docker_data_root }}/odoo/db"
++    - "{{ docker_data_root }}/odoo/odoo"
++    - "{{ docker_data_root }}/odoo/addons"
++    - "{{ docker_data_root }}/n8n/data"
+   tags: always
+ 
+ - name: Add user to docker group
+@@ -168,12 +194,59 @@
+     mode: '0755'
+   tags: moodle
+ 
++- name: Set moodle-db permissions (postgres image runs as uid/gid 999)
++  ansible.builtin.shell: |
++    sudo chown -R 999:999 {{ docker_data_root }}/moodle/db
++    sudo chmod -R 755 {{ docker_data_root }}/moodle/db
++  become: no
++  tags: moodle
++
++- name: Set moodledata/html permissions (erseco/alpine-moodle runs as nobody, uid/gid 65534)
++  ansible.builtin.shell: |
++    sudo chown -R 65534:65534 {{ docker_data_root }}/moodle/moodledata
++    sudo chown -R 65534:65534 {{ docker_data_root }}/moodle/html
++    sudo chmod -R 755 {{ docker_data_root }}/moodle/moodledata
++    sudo chmod -R 755 {{ docker_data_root }}/moodle/html
++  become: no
++  tags: moodle
++
+ - name: Deploy Moodle Stack via Docker Compose
+   community.docker.docker_compose_v2:
+     project_src: /opt/moodle
+     state: present
+   tags: moodle
+ 
++# H5P core content (mod_h5pactivity) ships in Moodle itself since 3.9 and
++# should already be available in "Add an activity" with no extra work.
++# Only run this (ansible-playbook site.yml --tags h5p) if you specifically
++# want the older community mod_hvp plugin instead — e.g. for h5p.org Hub
++# browsing or resumable content state. Moodle's own docs recommend NOT
++# running both side by side. The 'never' tag means these are skipped on
++# normal runs and only execute when h5p is explicitly requested.
++- name: Check if H5P (mod_hvp) plugin is already installed
++  ansible.builtin.stat:
++    path: "{{ docker_data_root }}/moodle/html/mod/hvp/version.php"
++  register: h5p_plugin_installed
++  tags: [h5p, never]
++
++- name: Install H5P (mod_hvp) plugin via Moosh
++  community.docker.docker_container_exec:
++    container: moodle
++    command: moosh plugin-install mod_hvp
++  register: h5p_install
++  failed_when: false
++  when: not h5p_plugin_installed.stat.exists
++  tags: [h5p, never]
++
++- name: Retry H5P plugin install (known Moosh first-run issue, see erseco/alpine-moodle docs)
++  community.docker.docker_container_exec:
++    container: moodle
++    command: moosh plugin-install --delete mod_hvp
++  when:
++    - not h5p_plugin_installed.stat.exists
++    - h5p_install.rc != 0
++  tags: [h5p, never]
++
+ - name: Ensure unzip is installed
+   apt:
+     name: unzip
+@@ -182,35 +255,28 @@
+ 
+ - name: Ensure Odoo data directory has correct permissions
+   ansible.builtin.shell: |
+-    sudo chown -R 101:101 /opt/odoo/data
+-    sudo chmod -R 755 /opt/odoo/data
++    sudo chown -R 101:101 {{ docker_data_root }}/odoo
++    sudo chmod -R 755 {{ docker_data_root }}/odoo
+   become: no # Uses your proven passwordless sudo shell execution
+   tags: odoo
+ 
+ - name: Install OCA quality_control_oca module from OCA/manufacture
+   ansible.builtin.shell: |
+-    sudo rm -rf /opt/odoo/data/addons/quality
+-    sudo rm -rf /opt/odoo/data/addons/quality_control_oca
++    sudo rm -rf {{ docker_data_root }}/odoo/addons/quality
++    sudo rm -rf {{ docker_data_root }}/odoo/addons/quality_control_oca
+     wget -q https://github.com/OCA/manufacture/archive/refs/heads/17.0.zip -O /tmp/manufacture.zip
+     unzip -q /tmp/manufacture.zip "manufacture-17.0/quality_control_oca/*" -d /tmp/manufacture-extract
+-    sudo mv /tmp/manufacture-extract/manufacture-17.0/quality_control_oca /opt/odoo/data/addons/
++    sudo mv /tmp/manufacture-extract/manufacture-17.0/quality_control_oca {{ docker_data_root }}/odoo/addons/
+     rm -rf /tmp/manufacture.zip /tmp/manufacture-extract
+   args:
+-    creates: /opt/odoo/data/addons/quality_control_oca/__manifest__.py
++    creates: "{{ docker_data_root }}/odoo/addons/quality_control_oca/__manifest__.py"
+   become: no
+   tags: odoo
+ 
+-- name: Ensure Odoo data directory has correct permissions
+-  ansible.builtin.shell: |
+-    sudo chown -R 101:101 /opt/odoo
+-    sudo chmod -R 755 /opt/odoo
+-  become: no # Uses your proven passwordless sudo shell execution
+-  tags: odoo
+-
+ - name: Set db permissions
+   ansible.builtin.shell: |
+-    sudo chown -R 999:999 /opt/odoo/data/db
+-    sudo chmod -R 755 /opt/odoo/data/db
++    sudo chown -R 999:999 {{ docker_data_root }}/odoo/db
++    sudo chmod -R 755 {{ docker_data_root }}/odoo/db
+   become: no # Uses your proven passwordless sudo shell execution
+   tags: odoo
+ 
+@@ -224,10 +290,10 @@
+ 
+ - name: Set n8n permissions
+   ansible.builtin.shell: |
+-    sudo chown -R 1000:1000 /opt/n8n/data
+-    sudo chmod -R 755 /opt/n8n/data
++    sudo chown -R 1000:1000 {{ docker_data_root }}/n8n/data
++    sudo chmod -R 755 {{ docker_data_root }}/n8n/data
+   become: no # Uses your proven passwordless sudo shell execution
+-  tags: odoo
++  tags: n8n
+ 
+ - name: Bring up n8n
+   ansible.builtin.shell: |
+diff --git a/roles/common/templates/moodle/docker-compose.yml.j2 b/roles/common/templates/moodle/docker-compose.yml.j2
+index c4ab43c..370b816 100644
+--- a/roles/common/templates/moodle/docker-compose.yml.j2
++++ b/roles/common/templates/moodle/docker-compose.yml.j2
+@@ -10,7 +10,7 @@ services:
+       POSTGRES_USER: {{ vault_moodle_db_user }}
+       POSTGRES_PASSWORD: {{ vault_moodle_db_password }}
+     volumes:
+-      - moodle_data_db:/var/lib/postgresql/data
++      - {{ docker_data_root }}/moodle/db:/var/lib/postgresql/data
+     networks:
+       - moodle_net
+     healthcheck:
+@@ -41,8 +41,8 @@ services:
+       MOODLE_PASSWORD: {{ vault_moodle_admin_password }}
+       MOODLE_EMAIL: {{ vault_moodle_admin_email }}
+     volumes:
+-      - moodle_data_moodledata:/var/www/moodledata
+-      - moodle_data_html:/var/www/html
++      - {{ docker_data_root }}/moodle/moodledata:/var/www/moodledata
++      - {{ docker_data_root }}/moodle/html:/var/www/html
+     networks:
+       - moodle_net
+       - proxy
+@@ -55,11 +55,6 @@ services:
+       - "traefik.http.routers.moodle.middlewares=moodle-headers"
+       - "traefik.http.middlewares.moodle-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+ 
+-volumes:
+-  moodle_data_db:
+-  moodle_data_moodledata:
+-  moodle_data_html:
+-
+ networks:
+   moodle_net:
+     driver: bridge
+diff --git a/roles/common/templates/n8n/docker-compose.yml.j2 b/roles/common/templates/n8n/docker-compose.yml.j2
+index 4e0f55c..efa27c7 100644
+--- a/roles/common/templates/n8n/docker-compose.yml.j2
++++ b/roles/common/templates/n8n/docker-compose.yml.j2
+@@ -14,7 +14,7 @@ services:
+       - TZ=Australia/Melbourne
+       - N8N_TRUST_PROXY=true
+     volumes:
+-      - /opt/n8n/data:/home/node/.n8n
++      - {{ docker_data_root }}/n8n/data:/home/node/.n8n
+     networks:
+       - proxy
+     labels:
+diff --git a/roles/common/templates/odoo/docker-compose.yml.j2 b/roles/common/templates/odoo/docker-compose.yml.j2
+index 318b197..91fb7fc 100644
+--- a/roles/common/templates/odoo/docker-compose.yml.j2
++++ b/roles/common/templates/odoo/docker-compose.yml.j2
+@@ -7,11 +7,11 @@ services:
+     environment:
+       - POSTGRES_DB=postgres
+       - POSTGRES_USER=odoo
+-      - POSTGRES_PASSWORD=odoo_secret_password # Change this to a secure password or Ansible variable
++      - POSTGRES_PASSWORD={{ vault_odoo_db_password }}
+       - PGDATA=/var/lib/postgresql/data/pgdata
+-      - ADMIN_PASSWD=odoo_secret_password
++      - ADMIN_PASSWD={{ vault_odoo_admin_password }}
+     volumes:
+-      - /opt/odoo/data/db:/var/lib/postgresql/data
++      - {{ docker_data_root }}/odoo/db:/var/lib/postgresql/data
+     networks:
+       - odoo_net
+     restart: always
+@@ -27,11 +27,11 @@ services:
+     environment:
+       - HOST=db
+       - USER=odoo
+-      - PASSWORD=odoo_secret_password # Must match PostgreSQL password above
++      - PASSWORD={{ vault_odoo_db_password }} # Must match PostgreSQL password above
+     command: odoo --proxy-mode
+     volumes:
+-      - /opt/odoo/data/odoo:/var/lib/odoo
+-      - /opt/odoo/data/addons:/mnt/extra-addons
++      - {{ docker_data_root }}/odoo/odoo:/var/lib/odoo
++      - {{ docker_data_root }}/odoo/addons:/mnt/extra-addons
+     networks:
+       - odoo_net
+       - proxy
