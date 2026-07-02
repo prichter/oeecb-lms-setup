@@ -194,6 +194,38 @@
     mode: '0755'
   tags: moodle
 
+# erseco/alpine-moodle bakes the actual Moodle codebase into /var/www/html
+# at image build time. Docker's named volumes auto-populate from the image
+# on first use, but bind mounts don't — an empty bind-mounted host dir just
+# shadows the code with nothing. This seeds it manually, once, before the
+# stack ever starts, so it lands on the backed-up data drive as real files
+# instead of relying on a Docker-managed volume.
+- name: Check if Moodle codebase is already present in the bind-mounted html dir
+  ansible.builtin.stat:
+    path: "{{ docker_data_root }}/moodle/html/admin/cli/install.php"
+  register: moodle_html_seeded
+  tags: moodle
+
+- name: Seed Moodle html directory from the image
+  ansible.builtin.shell: |
+    sudo docker run --rm --user root \
+      -v {{ docker_data_root }}/moodle/html:/mnt/seed \
+      --entrypoint /bin/sh \
+      erseco/alpine-moodle \
+      -c "cp -a /var/www/html/. /mnt/seed/"
+  become: no
+  when: not moodle_html_seeded.stat.exists
+  tags: moodle
+
+- name: Set moodledata/html permissions (erseco/alpine-moodle runs as nobody, uid/gid 65534)
+  ansible.builtin.shell: |
+    sudo chown -R 65534:65534 {{ docker_data_root }}/moodle/moodledata
+    sudo chown -R 65534:65534 {{ docker_data_root }}/moodle/html
+    sudo chmod -R 755 {{ docker_data_root }}/moodle/moodledata
+    sudo chmod -R 755 {{ docker_data_root }}/moodle/html
+  become: no
+  tags: moodle
+
 - name: Deploy Moodle Stack via Docker Compose
   community.docker.docker_compose_v2:
     project_src: /opt/moodle
