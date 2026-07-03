@@ -1,8 +1,8 @@
 all:
   hosts:
     docker-host:
-      ansible_host: 192.168.138.169      # your VM IP
-      ansible_user: obrien
+      ansible_host: 192.168.15.8      # your VM IP
+      ansible_user: paul.richter
       ansible_become: true
       ansible_become_method: sudo
   vars:
@@ -19,8 +19,8 @@ all:
     # will answer for (e.g. lms.yourdomain.com.au rather than a short
     # internal name) — then run with `-i inventory-prod.yml` instead.
     # site.yml and every role stay exactly the same either way.
-    traefik_hostname: obhowk-251-traefik
-    moodle_hostname: obhowk-251-lms
-    odoo_hostname: obhowk-251-odoo
-    n8n_hostname: obhowk-251-n8n
+    traefik_hostname: obfcpd-traefik
+    moodle_hostname: obfcpd-lms
+    odoo_hostname: obfcpd-odoo
+    n8n_hostname: obfcpd-n8n
     moodle_sitename: OBrienElectrical
